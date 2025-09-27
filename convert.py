@@ -1,38 +1,27 @@
 from mido import MidiFile
 
-# Full layout left-to-right as in your image (lowercase for white notes)
-layout = list("1234567890qwertyuiopasdfghjklzxcvbnm")
+# --- Explicit mapping between keys and MIDI notes ---
 
-# Shifted symbols for number row
-number_shifts = "!@#$%^&*()"
+key_to_midi = {
+    # number row
+    '1':36, '!':37, '2':38, '@':39, '3':40, '#':40, '4':41, '$':42, '5':43, '%':44,
+    '6':45, '^':46, '7':47, '&':47, '8':48, '*':49, '9':50, '(':51, '0':52, ')':52,
 
-# Anchor: 't' is middle C (C4 = MIDI 60)
-anchor_key = 't'
-anchor_midi = 60
-anchor_index = layout.index(anchor_key)
+    # qwertyuiop
+    'q':53, 'Q':54, 'w':55, 'W':56, 'e':57, 'E':58, 'r':59, 'R':59, 't':60, 'T':61,
+    'y':62, 'Y':63, 'u':64, 'U':64, 'i':65, 'I':66, 'o':67, 'O':68, 'p':69, 'P':70,
 
-# Build dictionary
-# Build dictionary
-midi_to_key = {}
-key_to_midi = {}
+    # asdfghjkl
+    'a':71, 'A':71, 's':72, 'S':73, 'd':74, 'D':75, 'f':76, 'F':76, 'g':77, 'G':78,
+    'h':79, 'H':80, 'j':81, 'J':82, 'k':83, 'K':83, 'l':84, 'L':85,
 
-for i, key in enumerate(layout):
-    # Each layout key represents a whole tone (natural + sharp)
-    midi_base = anchor_midi + (i - anchor_index) * 2
+    # zxcvbnm
+    'z':86, 'Z':87, 'x':88, 'X':88, 'c':89, 'C':90, 'v':91, 'V':92,
+    'b':93, 'B':94, 'n':95, 'N':95, 'm':96, 'M':97
+}
 
-    # Natural
-    midi_to_key[midi_base] = key
-    key_to_midi[key] = midi_base
-
-    # Black key
-    if key.isdigit():  # number row
-        shifted = number_shifts["1234567890".index(key)]
-        midi_to_key[midi_base + 1] = shifted
-        key_to_midi[shifted] = midi_base + 1
-    elif key.isalpha():  # letters
-        shifted = key.upper()
-        midi_to_key[midi_base + 1] = shifted
-        key_to_midi[shifted] = midi_base + 1
+# reverse map for output
+midi_to_key = {v: k for k, v in key_to_midi.items()}
 
 
 def midi_to_text(midi_path, output_path,
@@ -85,8 +74,7 @@ def midi_to_text(midi_path, output_path,
                     output.append(midi_to_key[note])
                 else:
                     print(f"Unmapped MIDI note: {note}")
-                    output.append("?")
-
+                    #output.append("?")
 
         if j < len(events):
             gap = events[j][0] - events[i][0]
@@ -100,8 +88,11 @@ def midi_to_text(midi_path, output_path,
     for k in range(0, len(output), line_length):
         lines.append(" ".join(output[k:k+line_length]))
 
+    # Join and strip out all "?" placeholders
+    text_out = "\n".join(lines).replace("?", "")
+
     with open(output_path, "w") as f:
-        f.write("\n".join(lines))
+        f.write(text_out)
 
     print(f"Written to {output_path}")
 
