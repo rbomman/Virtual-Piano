@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Keyboard Text Player</title>
+  <!-- External CSS -->
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="piano.css">
+</head>
+<body>
+  <h1>Keyboard Text Player</h1>
+  <input type="file" id="fileInput">
+  <div id="controls">
+    <button id="playBtn">Play</button>
+    <button id="transposeUp">Transpose +</button>
+    <button id="transposeDown">Transpose -</button>
+    <button id="transposeReset">Reset</button>
+  </div>
+  <p>Transpose: <span id="transposeValue">0</span> semitones</p>
+  <div id="output"></div>
+  <div id="piano"></div>
+
+  <!-- Tone.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+  <script>
+    let tokens = [];
+    let spans = [];
+    let midiOut = null;
+    let useTone = true;
+    let midiToKeyElement = {};
+
+    let transpose = 0;
+    let playInterval = null;
+    let isPlaying = false;
+    let currentIndex = 0;
+    let expectedNotes = [];
+    let sequenceProgress = 0;
+
+    // 🎹 Piano sampler (reduced anchor set)
+    const piano = new Tone.Sampler({
+      urls: {
+        A0: "A0.mp3", C1: "C1.mp3",
+        A1: "A1.mp3", C2: "C2.mp3",
+        A2: "A2.mp3", C3: "C3.mp3",
+        A3: "A3.mp3", C4: "C4.mp3",
+        A4: "A4.mp3", C5: "C5.mp3",
+        A5: "A5.mp3", C6: "C6.mp3",
+        A6: "A6.mp3", C7: "C7.mp3",
+        A7: "A7.mp3", C8: "C8.mp3"
+      },
+      release: 2,
+      baseUrl: "https://gleitz.github.io/midi-js-soundfonts/MusyngKite/acoustic_grand_piano-mp3/"
+    }).toDestination();
+
+    // --- Mapping from computer keyboard to MIDI ---
+    const layout = "1234567890qwertyuiopasdfghjklzxcvbnm".split("");
+    const numberShifts = "!@#$%^&*()";
+    const anchorKey = 't';   // middle C
+    const anchorMidi = 60;
+    const anchorIndex = layout.indexOf(anchorKey);
+
+        // --- Mapping from computer keyboard to MIDI ---
+    const keyToMidi = {
+    // number row
+    '1':36, '!':37, '2':38, '@':39, '3':40, '#':40, '4':41, '$':42, '5':43, '%':44,
+    '6':45, '^':46, '7':47, '&':47, '8':48, '*':49, '9':50, '(':51, '0':52, ')':52,
+
+    // qwertyuiop
+    'q':53, 'Q':54, 'w':55, 'W':56, 'e':57, 'E':58, 'r':59, 'R':59, 't':60, 'T':61,
+    'y':62, 'Y':63, 'u':64, 'U':64, 'i':65, 'I':66, 'o':67, 'O':68, 'p':69, 'P':70,
+
+    // asdfghjkl
+    'a':71, 'A':71, 's':72, 'S':73, 'd':74, 'D':75, 'f':76, 'F':76, 'g':77, 'G':78,
+    'h':79, 'H':80, 'j':81, 'J':82, 'k':83, 'K':83, 'l':84, 'L':85,
+
+    // zxcvbnm
+    'z':86, 'Z':87, 'x':88, 'X':88, 'c':89, 'C':90, 'v':91, 'V':92,
+    'b':93, 'B':94, 'n':95, 'N':95, 'm':96, 'M':97
+    };
+
+    // Build reverse map for display if needed
+    const midiToKey = {};
+    for (const [k, v] of Object.entries(keyToMidi)) {
+    midiToKey[v] = k;
+    }
+
+
+    // --- Build full 88-key piano (A0–C8) ---
+    function buildPiano() {
+      const container = document.getElementById("piano");
+      container.innerHTML = "";
+
+      const startMidi = 21;
+      const endMidi = 108;
+      const whiteWidth = 20;
+      const blackWidth = 14;
+      const blackHeight = 70;
+      const whiteHeight = 120;
+
+      const blackNotes = {1:true, 3:true, 6:true, 8:true, 10:true};
+
+      let whiteIndex = 0;
+      for (let midi = startMidi; midi <= endMidi; midi++) {
+        const pitchClass = midi % 12;
+        if (!blackNotes[pitchClass]) {
+          const whiteKey = document.createElement("div");
+          whiteKey.className = "white";
+          whiteKey.style.left = (whiteIndex * whiteWidth) + "px";
+          whiteKey.style.width = whiteWidth + "px";
+          whiteKey.style.height = whiteHeight + "px";
+          container.appendChild(whiteKey);
+          midiToKeyElement[midi] = whiteKey;
+          whiteIndex++;
+        } else {
+          const blackKey = document.createElement("div");
+          blackKey.className = "black";
+          const offset = (whiteIndex * whiteWidth) - (blackWidth / 2);
+          blackKey.style.left = offset + "px";
+          blackKey.style.width = blackWidth + "px";
+          blackKey.style.height = blackHeight + "px";
+          container.appendChild(blackKey);
+          midiToKeyElement[midi] = blackKey;
+        }
+      }
+
+      container.style.width = (whiteIndex * whiteWidth) + "px";
+    }
+    buildPiano();
+
+    // --- Transpose controls ---
+    document.getElementById("transposeUp").addEventListener("click", () => {
+      transpose = Math.min(transpose + 1, 12);
+      document.getElementById("transposeValue").textContent = transpose;
+    });
+    document.getElementById("transposeDown").addEventListener("click", () => {
+      transpose = Math.max(transpose - 1, -12);
+      document.getElementById("transposeValue").textContent = transpose;
+    });
+    document.getElementById("transposeReset").addEventListener("click", () => {
+      transpose = 0;
+      document.getElementById("transposeValue").textContent = transpose;
+    });
+
+    function applyTranspose(note) {
+      if (!note) return null;
+      let shifted = note + transpose;
+      return Math.max(21, Math.min(108, shifted));
+    }
+
+    // --- Load text file ---
+    document.getElementById('fileInput').addEventListener('change', e => {
+      const reader = new FileReader();
+      reader.onload = function(ev) {
+        const text = ev.target.result.trim();
+        tokens = text.split(/\s+/);
+        renderTokens();
+      }
+      reader.readAsText(e.target.files[0]);
+    });
+
+    function renderTokens() {
+      const out = document.getElementById('output');
+      out.innerHTML = "";
+      spans = tokens.map((tok, idx) => {
+        const span = document.createElement("span");
+        span.textContent = tok;
+        out.appendChild(span);
+        if (idx < tokens.length - 1) out.appendChild(document.createTextNode(" "));
+        return span;
+      });
+      currentIndex = 0;
+      setTarget();
+    }
+
+    // --- Highlight target ---
+    function setTarget() {
+      if (currentIndex >= tokens.length) return;
+
+      spans.forEach(s => s.classList.remove("highlight", "wrong"));
+      spans[currentIndex].classList.add("highlight");
+      spans[currentIndex].scrollIntoView({ behavior: "smooth", block: "center" });
+
+      const tok = tokens[currentIndex];
+      if (tok === "_") {
+        expectedNotes = [];
+      } else if (tok.startsWith("[")) {
+        expectedNotes = tok.replace(/\[|\]/g,"").split("").map(k => applyTranspose(keyToMidi[k]));
+      } else if (tok.startsWith("{")) {
+        expectedNotes = tok.replace(/\{|\}/g,"").split("").map(k => applyTranspose(keyToMidi[k]));
+        sequenceProgress = 0;
+      } else {
+        expectedNotes = [applyTranspose(keyToMidi[tok])];
+      }
+    }
+
+    // --- MIDI Setup ---
+    if (navigator.requestMIDIAccess) {
+      navigator.requestMIDIAccess().then(midiAccess => {
+        const outputs = Array.from(midiAccess.outputs.values());
+        if (outputs.length > 0) {
+          midiOut = outputs[0];
+          useTone = false;
+        }
+      });
+    }
+
+    // --- Note control ---
+    function noteOn(note, vel=100) {
+      if (!note) return;
+      if (!useTone && midiOut) {
+        midiOut.send([0x90, note, vel]);
+      } else {
+        piano.triggerAttack(Tone.Frequency(note, "midi"), undefined, vel/127);
+      }
+      if (midiToKeyElement[note]) {
+        midiToKeyElement[note].classList.add("active");
+        midiToKeyElement[note].scrollIntoView({behavior: "smooth", inline: "center"});
+      }
+    }
+
+    function noteOff(note) {
+      if (!note) return;
+      if (!useTone && midiOut) {
+        midiOut.send([0x80, note, 0]);
+      } else {
+        piano.triggerRelease(Tone.Frequency(note, "midi"));
+      }
+      if (midiToKeyElement[note]) midiToKeyElement[note].classList.remove("active");
+    }
+
+    // --- Auto-play mode ---
+    document.getElementById('playBtn').addEventListener('click', async () => {
+      await Tone.start();
+      const playBtn = document.getElementById('playBtn');
+
+      if (!isPlaying) {
+        isPlaying = true;
+        playBtn.textContent = "Pause";
+        playInterval = setInterval(() => {
+          if (currentIndex >= tokens.length) {
+            clearInterval(playInterval);
+            playBtn.textContent = "Play";
+            isPlaying = false;
+            currentIndex = 0;
+            setTarget();
+            return;
+          }
+          playToken(tokens[currentIndex]);
+          currentIndex++;
+          setTarget();
+        }, 500);
+      } else {
+        isPlaying = false;
+        playBtn.textContent = "Play";
+        clearInterval(playInterval);
+      }
+    });
+
+    function playToken(tok) {
+      if (tok === "_") return;
+      else if (tok.startsWith("[")) {
+        const notes = tok.replace(/\[|\]/g,"").split("").map(k => applyTranspose(keyToMidi[k]));
+        notes.forEach(n => noteOn(n));
+        setTimeout(()=>notes.forEach(n=>noteOff(n)), 400);
+      } else if (tok.startsWith("{")) {
+        const notes = tok.replace(/\{|\}/g,"").split("");
+        notes.forEach((k, idx) => {
+          const n = applyTranspose(keyToMidi[k]);
+          setTimeout(()=>noteOn(n), idx*150);
+          setTimeout(()=>noteOff(n), idx*150+120);
+        });
+      } else {
+        const n = applyTranspose(keyToMidi[tok]);
+        if (n) {
+          noteOn(n);
+          setTimeout(()=>noteOff(n), 400);
+        }
+      }
+    }
+
+    // --- Practice mode (keyboard-driven) ---
+    document.addEventListener("keydown", e => {
+      if (isPlaying) return; // ignore during auto-play
+      const key = e.key;
+      if (!(key in keyToMidi)) return;
+
+      const note = applyTranspose(keyToMidi[key]);
+      noteOn(note);
+      setTimeout(()=>noteOff(note), 300);
+
+      const tok = tokens[currentIndex];
+      if (!tok) return;
+
+      if (tok.startsWith("[")) {
+        expectedNotes = expectedNotes.filter(n => n !== note);
+        if (expectedNotes.length === 0) {
+          currentIndex++;
+          setTarget();
+        }
+      } else if (tok.startsWith("{")) {
+        if (note === expectedNotes[sequenceProgress]) {
+          sequenceProgress++;
+          if (sequenceProgress >= expectedNotes.length) {
+            currentIndex++;
+            setTarget();
+          }
+        } else {
+          sequenceProgress = 0;
+          spans[currentIndex].classList.add("wrong");
+          setTimeout(()=>spans[currentIndex].classList.remove("wrong"), 200);
+        }
+      } else {
+        if (note === expectedNotes[0]) {
+          currentIndex++;
+          setTarget();
+        } else {
+          spans[currentIndex].classList.add("wrong");
+          setTimeout(()=>spans[currentIndex].classList.remove("wrong"), 200);
+        }
+      }
+    });
+  </script>
+</body>
+</html>

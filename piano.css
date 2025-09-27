@@ -1,0 +1,35 @@
+#piano {
+  position: relative;
+  height: 120px;
+  margin-top: 20px;
+  overflow-x: auto;
+  background: #111;
+}
+
+.white {
+  position: absolute;
+  top: 0;
+  width: 20px;
+  height: 120px;
+  background: white;
+  border: 1px solid black;
+  box-sizing: border-box;
+  z-index: 1;
+}
+
+.black {
+  position: absolute;
+  top: 0;
+  width: 14px;
+  height: 70px;
+  background: black;
+  z-index: 2;
+}
+
+.active.white {
+  background: #6cf;
+}
+
+.active.black {
+  background: #39f;
+}
