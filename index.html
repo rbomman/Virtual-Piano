@@ -174,23 +174,30 @@
 
     // --- Highlight target ---
     function setTarget() {
-      if (currentIndex >= tokens.length) return;
+    // Already finished?
+    if (currentIndex >= tokens.length) return;
 
-      spans.forEach(s => s.classList.remove("highlight", "wrong"));
-      spans[currentIndex].classList.add("highlight");
-      spans[currentIndex].scrollIntoView({ behavior: "smooth", block: "center" });
+    spans.forEach(s => s.classList.remove("highlight", "wrong"));
+    spans[currentIndex].classList.add("highlight");
+    spans[currentIndex].scrollIntoView({ behavior: "smooth", block: "center" });
 
-      const tok = tokens[currentIndex];
-      if (tok === "_") {
-        expectedNotes = [];
-      } else if (tok.startsWith("[")) {
+    const tok = tokens[currentIndex];
+
+    // --- Auto-skip pauses ---
+    if (tok === "_") {
+        currentIndex++;
+        setTarget();  // immediately jump to next
+        return;
+    }
+
+    if (tok.startsWith("[")) {
         expectedNotes = tok.replace(/\[|\]/g,"").split("").map(k => applyTranspose(keyToMidi[k]));
-      } else if (tok.startsWith("{")) {
+    } else if (tok.startsWith("{")) {
         expectedNotes = tok.replace(/\{|\}/g,"").split("").map(k => applyTranspose(keyToMidi[k]));
         sequenceProgress = 0;
-      } else {
+    } else {
         expectedNotes = [applyTranspose(keyToMidi[tok])];
-      }
+    }
     }
 
     // --- MIDI Setup ---
@@ -290,6 +297,13 @@
 
       const tok = tokens[currentIndex];
       if (!tok) return;
+
+      // Skip pauses automatically
+      if (tok === "_") {
+        currentIndex++;
+        setTarget();
+        return;
+      }
 
       if (tok.startsWith("[")) {
         expectedNotes = expectedNotes.filter(n => n !== note);
