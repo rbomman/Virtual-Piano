@@ -12,9 +12,13 @@
   <input type="file" id="fileInput">
   <div id="controls">
     <button id="playBtn">Play</button>
+    <button id="stopBtn">Stop</button>
     <button id="transposeUp">Transpose +</button>
     <button id="transposeDown">Transpose -</button>
     <button id="transposeReset">Reset</button>
+    <label for="volumeSlider">Volume</label>
+    <input type="range" id="volumeSlider" min="-40" max="0" value="0" step="1">
+    <span id="volumeValue">0 dB</span>
   </div>
   <p>Transpose: <span id="transposeValue">0</span> semitones</p>
   <div id="output"></div>
@@ -35,6 +39,7 @@
     let currentIndex = 0;
     let expectedNotes = [];
     let sequenceProgress = 0;
+    let lastFile = null;
 
     // 🎹 Piano sampler (reduced anchor set)
     const piano = new Tone.Sampler({
@@ -51,6 +56,22 @@
       release: 2,
       baseUrl: "https://gleitz.github.io/midi-js-soundfonts/MusyngKite/acoustic_grand_piano-mp3/"
     }).toDestination();
+
+    const volumeSlider = document.getElementById("volumeSlider");
+    const volumeValue = document.getElementById("volumeValue");
+
+    if (volumeSlider && volumeValue) {
+      const updateVolume = (db) => {
+        piano.volume.value = db;
+        volumeValue.textContent = db + ' dB';
+      };
+
+      updateVolume(Number(volumeSlider.value));
+
+      volumeSlider.addEventListener("input", (event) => {
+        updateVolume(Number(event.target.value));
+      });
+    }
 
     // --- Mapping from computer keyboard to MIDI ---
     const layout = "1234567890qwertyuiopasdfghjklzxcvbnm".split("");
@@ -147,16 +168,56 @@
       return Math.max(21, Math.min(108, shifted));
     }
 
-    // --- Load text file ---
-    document.getElementById('fileInput').addEventListener('change', e => {
+    const fileInput = document.getElementById("fileInput");
+    const playButton = document.getElementById("playBtn");
+    const stopButton = document.getElementById("stopBtn");
+
+    function loadFile(file) {
+      if (!file) return;
       const reader = new FileReader();
       reader.onload = function(ev) {
-        const text = ev.target.result.trim();
-        tokens = text.split(/\s+/);
+        const textContent = (ev.target.result || "").toString().trim();
+        tokens = textContent ? textContent.split(/\s+/) : [];
         renderTokens();
-      }
-      reader.readAsText(e.target.files[0]);
-    });
+      };
+      reader.readAsText(file);
+    }
+
+    // --- Load text file ---
+    if (fileInput) {
+      fileInput.addEventListener('change', e => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        lastFile = file;
+        loadFile(file);
+      });
+    }
+
+    if (stopButton) {
+      stopButton.addEventListener('click', () => {
+        if (playInterval) {
+          clearInterval(playInterval);
+          playInterval = null;
+        }
+        isPlaying = false;
+        if (playButton) {
+          playButton.textContent = "Play";
+        }
+        expectedNotes = [];
+        sequenceProgress = 0;
+        currentIndex = 0;
+
+        if (typeof piano.releaseAll === 'function') {
+          piano.releaseAll();
+        }
+
+        if (lastFile) {
+          loadFile(lastFile);
+        } else {
+          spans.forEach(span => span.classList.remove("highlight", "wrong"));
+        }
+      });
+    }
 
     function renderTokens() {
       const out = document.getElementById('output');
@@ -236,32 +297,39 @@
     }
 
     // --- Auto-play mode ---
-    document.getElementById('playBtn').addEventListener('click', async () => {
-      await Tone.start();
-      const playBtn = document.getElementById('playBtn');
+    if (playButton) {
+      playButton.addEventListener('click', async () => {
+        await Tone.start();
 
-      if (!isPlaying) {
-        isPlaying = true;
-        playBtn.textContent = "Pause";
-        playInterval = setInterval(() => {
-          if (currentIndex >= tokens.length) {
-            clearInterval(playInterval);
-            playBtn.textContent = "Play";
-            isPlaying = false;
-            currentIndex = 0;
+        if (!isPlaying) {
+          isPlaying = true;
+          playButton.textContent = "Pause";
+          playInterval = setInterval(() => {
+            if (currentIndex >= tokens.length) {
+              if (playInterval) {
+                clearInterval(playInterval);
+                playInterval = null;
+              }
+              playButton.textContent = "Play";
+              isPlaying = false;
+              currentIndex = 0;
+              setTarget();
+              return;
+            }
+            playToken(tokens[currentIndex]);
+            currentIndex++;
             setTarget();
-            return;
+          }, 500);
+        } else {
+          isPlaying = false;
+          playButton.textContent = "Play";
+          if (playInterval) {
+            clearInterval(playInterval);
+            playInterval = null;
           }
-          playToken(tokens[currentIndex]);
-          currentIndex++;
-          setTarget();
-        }, 500);
-      } else {
-        isPlaying = false;
-        playBtn.textContent = "Play";
-        clearInterval(playInterval);
-      }
-    });
+        }
+      });
+    }
 
     function playToken(tok) {
       if (tok === "_") return;
