@@ -289,6 +289,20 @@ button:focus-visible {
   border-color: rgba(56, 189, 248, 0.65);
   box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25);
 }
+.control-group select option {
+  color: #0f172a;
+  background: #f8fafc;
+}
+
+.control-group select option:checked {
+  color: #0b1120;
+  background: #bfdbfe;
+}
+
+.control-group select option:hover {
+  color: #0b1120;
+  background: #dbeafe;
+}
 
 .control-group input[type="number"]:focus {
   outline: none;
@@ -533,3 +547,4 @@ button:focus-visible {
     text-align: center;
   }
 }
+
