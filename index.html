@@ -4,27 +4,49 @@
   <meta charset="UTF-8">
   <title>Keyboard Text Player</title>
   <!-- External CSS -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="piano.css">
 </head>
 <body>
-  <h1>Keyboard Text Player</h1>
-  <input type="file" id="fileInput">
-  <div id="controls">
-    <button id="playBtn">Play</button>
-    <button id="stopBtn">Stop</button>
-    <button id="transposeUp">Transpose +</button>
-    <button id="transposeDown">Transpose -</button>
-    <button id="transposeReset">Reset</button>
-    <label for="bpmInput">Tempo (BPM)</label>
-    <input type="number" id="bpmInput" min="30" max="300" value="120" step="1">
-    <label for="volumeSlider">Volume</label>
-    <input type="range" id="volumeSlider" min="-40" max="0" value="0" step="1">
-    <span id="volumeValue">0 dB</span>
+  <div class="app-container">
+    <header class="app-header">
+      <h1>Keyboard Text Player</h1>
+      <p class="app-subtitle">Load a converted score and play it with your keyboard.</p>
+    </header>
+
+    <div class="file-row">
+      <input type="file" id="fileInput">
+      <span id="selectedFileName" class="file-name">No file loaded</span>
+    </div>
+
+    <div id="controls" class="control-bar">
+      <div class="button-group">
+        <button id="playBtn">Play</button>
+        <button id="stopBtn">Stop</button>
+        <button id="transposeUp">Transpose +</button>
+        <button id="transposeDown">Transpose -</button>
+        <button id="transposeReset">Reset</button>
+      </div>
+      <div class="control-group">
+        <label for="bpmInput">Tempo (BPM)</label>
+        <input type="number" id="bpmInput" min="30" max="300" value="120" step="1">
+      </div>
+      <div class="control-group">
+        <label for="volumeSlider">Volume</label>
+        <div class="slider-wrapper">
+          <input type="range" id="volumeSlider" min="-40" max="0" value="0" step="1">
+          <span id="volumeValue" class="value-tag">0 dB</span>
+        </div>
+      </div>
+    </div>
+
+    <p class="transpose-indicator">Transpose: <span id="transposeValue">0</span> semitones</p>
+    <div id="output" class="output-panel"></div>
+    <div id="piano"></div>
   </div>
-  <p>Transpose: <span id="transposeValue">0</span> semitones</p>
-  <div id="output"></div>
-  <div id="piano"></div>
 
   <!-- Tone.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
@@ -51,6 +73,7 @@
     let sequenceProgress = 0;
     let lastFile = null;
     let scheduledTimeouts = [];
+    let fileNameLabel = null;
 
     const piano = new Tone.Sampler({
       urls: {
@@ -101,14 +124,19 @@
 
     function buildPiano() {
       const container = document.getElementById('piano');
+      if (!container) return;
       container.innerHTML = '';
+
+      const keysWrapper = document.createElement('div');
+      keysWrapper.className = 'piano-keys';
+      container.appendChild(keysWrapper);
 
       const startMidi = 21;
       const endMidi = 108;
-      const whiteWidth = 20;
-      const blackWidth = 14;
+      const whiteWidth = 26;
+      const blackWidth = 18;
       const blackHeight = 70;
-      const whiteHeight = 120;
+      const whiteHeight = 102;
 
       const blackNotes = {1:true, 3:true, 6:true, 8:true, 10:true};
 
@@ -121,7 +149,7 @@
           whiteKey.style.left = (whiteIndex * whiteWidth) + 'px';
           whiteKey.style.width = whiteWidth + 'px';
           whiteKey.style.height = whiteHeight + 'px';
-          container.appendChild(whiteKey);
+          keysWrapper.appendChild(whiteKey);
           midiToKeyElement[midi] = whiteKey;
           whiteIndex++;
         } else {
@@ -131,12 +159,13 @@
           blackKey.style.left = offset + 'px';
           blackKey.style.width = blackWidth + 'px';
           blackKey.style.height = blackHeight + 'px';
-          container.appendChild(blackKey);
+          keysWrapper.appendChild(blackKey);
           midiToKeyElement[midi] = blackKey;
         }
       }
 
-      container.style.width = (whiteIndex * whiteWidth) + 'px';
+      const keysWidth = whiteIndex * whiteWidth;
+      keysWrapper.style.width = keysWidth + 'px';
     }
     buildPiano();
 
@@ -201,6 +230,17 @@
       bpm = normalizeBpm(newValue);
       if (bpmInput) {
         bpmInput.value = String(bpm);
+      }
+    }
+
+    function updateFileNameDisplay(name) {
+      if (!fileNameLabel) return;
+      if (name) {
+        fileNameLabel.textContent = name;
+        fileNameLabel.classList.add('has-file');
+      } else {
+        fileNameLabel.textContent = 'No file loaded';
+        fileNameLabel.classList.remove('has-file');
       }
     }
 
@@ -386,6 +426,9 @@
     const stopButton = document.getElementById('stopBtn');
     const bpmInput = document.getElementById('bpmInput');
 
+    fileNameLabel = document.getElementById('selectedFileName');
+    updateFileNameDisplay();
+
     const handleBpmInput = (event) => applyBpmFromInput(event.target.value);
 
     if (bpmInput) {
@@ -396,7 +439,11 @@
 
     function loadFile(file) {
       pauseAutoPlay();
-      if (!file) return;
+      if (!file) {
+        updateFileNameDisplay();
+        return;
+      }
+      updateFileNameDisplay(file.name);
       const reader = new FileReader();
       reader.onload = function(event) {
         const rawText = (event.target.result || '').toString();
@@ -413,7 +460,10 @@
     if (fileInput) {
       fileInput.addEventListener('change', (event) => {
         const file = event.target.files && event.target.files[0];
-        if (!file) return;
+        if (!file) {
+          updateFileNameDisplay();
+          return;
+        }
         lastFile = file;
         loadFile(file);
       });
@@ -427,6 +477,7 @@
         if (lastFile) {
           loadFile(lastFile);
         } else {
+          updateFileNameDisplay();
           spans.forEach(span => span.classList.remove('highlight', 'wrong'));
         }
       });
@@ -448,7 +499,11 @@
       const span = spans[currentIndex];
       if (span) {
         span.classList.add('highlight');
-        span.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const container = document.getElementById('output');
+        if (container) {
+          const targetTop = span.offsetTop - container.offsetTop - 12;
+          container.scrollTo({ top: Math.max(targetTop, 0), behavior: 'smooth' });
+        }
       }
 
       if (token.type === 'rest') {
