@@ -35,6 +35,10 @@
         <input type="number" id="bpmInput" min="30" max="300" value="120" step="1">
       </div>
       <div class="control-group">
+        <label for="instrumentSelect">Instrument</label>
+        <select id="instrumentSelect"></select>
+      </div>
+      <div class="control-group">
         <label for="volumeSlider">Volume</label>
         <div class="slider-wrapper">
           <input type="range" id="volumeSlider" min="-40" max="0" value="0" step="1">
@@ -84,35 +88,98 @@
     const heldKeys = new Map();
     const sustainedNotes = new Set();
 
-    const piano = new Tone.Sampler({
-      urls: {
-        A0: "A0.mp3", C1: "C1.mp3",
-        A1: "A1.mp3", C2: "C2.mp3",
-        A2: "A2.mp3", C3: "C3.mp3",
-        A3: "A3.mp3", C4: "C4.mp3",
-        A4: "A4.mp3", C5: "C5.mp3",
-        A5: "A5.mp3", C6: "C6.mp3",
-        A6: "A6.mp3", C7: "C7.mp3",
-        A7: "A7.mp3", C8: "C8.mp3"
-      },
-      release: 2,
-      baseUrl: "https://gleitz.github.io/midi-js-soundfonts/MusyngKite/acoustic_grand_piano-mp3/"
-    }).toDestination();
+    const SHARED_SAMPLE_URLS = {
+      A0: 'A0.mp3', C1: 'C1.mp3',
+      A1: 'A1.mp3', C2: 'C2.mp3',
+      A2: 'A2.mp3', C3: 'C3.mp3',
+      A3: 'A3.mp3', C4: 'C4.mp3',
+      A4: 'A4.mp3', C5: 'C5.mp3',
+      A5: 'A5.mp3', C6: 'C6.mp3',
+      A6: 'A6.mp3', C7: 'C7.mp3',
+      A7: 'A7.mp3', C8: 'C8.mp3'
+    };
+
+    const INSTRUMENT_LIBRARY = {
+      grand: { label: 'Grand Piano', baseUrl: 'https://gleitz.github.io/midi-js-soundfonts/MusyngKite/acoustic_grand_piano-mp3/' },
+      electric: { label: 'Electric Piano', baseUrl: 'https://gleitz.github.io/midi-js-soundfonts/MusyngKite/electric_piano_1-mp3/' },
+      harpsichord: { label: 'Harpsichord', baseUrl: 'https://gleitz.github.io/midi-js-soundfonts/MusyngKite/harpsichord-mp3/' },
+      guitar: { label: 'Acoustic Guitar', baseUrl: 'https://gleitz.github.io/midi-js-soundfonts/MusyngKite/acoustic_guitar_steel-mp3/' },
+      violin: { label: 'Violin', baseUrl: 'https://gleitz.github.io/midi-js-soundfonts/MusyngKite/violin-mp3/' },
+      flute: { label: 'Flute', baseUrl: 'https://gleitz.github.io/midi-js-soundfonts/MusyngKite/flute-mp3/' }
+    };
+
+    let instrumentSampler = null;
+    let currentInstrumentKey = 'grand';
+    let instrumentLoadingKey = null;
+    let targetVolumeDb = 0;
+    let instrumentSelect = null;
+
+    async function loadInstrument(key) {
+      const def = INSTRUMENT_LIBRARY[key] || INSTRUMENT_LIBRARY.grand;
+      instrumentLoadingKey = key;
+      currentInstrumentKey = key;
+      stopAllNotes();
+      if (instrumentSampler) {
+        instrumentSampler.releaseAll?.();
+        instrumentSampler.dispose();
+        instrumentSampler = null;
+      }
+      let sampler = null;
+      try {
+        if (instrumentSelect) instrumentSelect.disabled = true;
+        sampler = new Tone.Sampler({
+          urls: SHARED_SAMPLE_URLS,
+          release: 2,
+          baseUrl: def.baseUrl
+        });
+        sampler.toDestination();
+        await sampler.loaded;
+        if (instrumentLoadingKey !== key) {
+          sampler.dispose();
+          return;
+        }
+        instrumentSampler = sampler;
+        instrumentSampler.volume.value = targetVolumeDb;
+      } catch (error) {
+        if (sampler) sampler.dispose();
+        throw error;
+      } finally {
+        if (instrumentSelect) instrumentSelect.disabled = false;
+      }
+    }
+
+    function populateInstrumentSelect(selectEl) {
+      if (!selectEl) return;
+      selectEl.innerHTML = '';
+      Object.entries(INSTRUMENT_LIBRARY).forEach(([value, def]) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = def.label;
+        if (value === currentInstrumentKey) option.selected = true;
+        selectEl.appendChild(option);
+      });
+    }
 
     const volumeSlider = document.getElementById('volumeSlider');
     const volumeValue = document.getElementById('volumeValue');
 
-    if (volumeSlider && volumeValue) {
-      const updateVolume = (db) => {
-        piano.volume.value = db;
+    const applyVolume = (db) => {
+      targetVolumeDb = db;
+      if (instrumentSampler) {
+        instrumentSampler.volume.value = db;
+      }
+      if (volumeValue) {
         volumeValue.textContent = db + ' dB';
-      };
+      }
+    };
 
-      updateVolume(Number(volumeSlider.value));
-
+    if (volumeSlider) {
+      applyVolume(Number(volumeSlider.value || targetVolumeDb));
       volumeSlider.addEventListener('input', (event) => {
-        updateVolume(Number(event.target.value));
+        applyVolume(Number(event.target.value));
       });
+    } else {
+      applyVolume(targetVolumeDb);
     }
 
     const keyToMidi = {
@@ -417,8 +484,8 @@
       if (!note) return;
       if (!useTone && midiOut) {
         midiOut.send([0x80, note, 0]);
-      } else {
-        piano.triggerRelease(Tone.Frequency(note, 'midi'));
+      } else if (instrumentSampler) {
+        instrumentSampler.triggerRelease(Tone.Frequency(note, 'midi'));
       }
     }
 
@@ -448,8 +515,8 @@
           console.warn('Unable to send all-notes-off to MIDI output.', error);
         }
       }
-      if (typeof piano.releaseAll === 'function') {
-        piano.releaseAll();
+      if (instrumentSampler && typeof instrumentSampler.releaseAll === 'function') {
+        instrumentSampler.releaseAll();
       }
       releaseSustainedNotes();
       Object.values(midiToKeyElement).forEach(el => el.classList.remove('active'));
@@ -481,10 +548,19 @@
     const playButton = document.getElementById('playBtn');
     const stopButton = document.getElementById('stopBtn');
     const bpmInput = document.getElementById('bpmInput');
+    instrumentSelect = document.getElementById('instrumentSelect');
     const sustainToggle = document.getElementById('sustainToggle');
 
     fileNameLabel = document.getElementById('selectedFileName');
     updateFileNameDisplay();
+
+    populateInstrumentSelect(instrumentSelect);
+    if (instrumentSelect) {
+      instrumentSelect.addEventListener('change', (event) => {
+        loadInstrument(event.target.value).catch(err => console.error('Instrument load failed', err));
+      });
+      currentInstrumentKey = instrumentSelect.value || currentInstrumentKey;
+    }
 
     if (sustainToggle) {
       setSustain(sustainToggle.checked);
@@ -500,6 +576,8 @@
       bpmInput.addEventListener('change', handleBpmInput);
       bpmInput.addEventListener('input', handleBpmInput);
     }
+
+    loadInstrument(currentInstrumentKey).catch(err => console.error('Instrument load failed', err));
 
     function loadFile(file) {
       pauseAutoPlay();
@@ -678,8 +756,8 @@
       }
       if (!useTone && midiOut) {
         midiOut.send([0x90, note, velocity]);
-      } else {
-        piano.triggerAttack(Tone.Frequency(note, 'midi'), undefined, velocity / 127);
+      } else if (instrumentSampler) {
+        instrumentSampler.triggerAttack(Tone.Frequency(note, 'midi'), undefined, velocity / 127);
       }
       if (midiToKeyElement[note]) {
         midiToKeyElement[note].classList.add('active');

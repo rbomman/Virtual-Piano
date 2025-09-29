@@ -273,6 +273,23 @@ button:focus-visible {
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
+.control-group select {
+  font: inherit;
+  color: var(--text-primary);
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid var(--soft-border);
+  border-radius: 10px;
+  padding: 9px 12px;
+  min-width: 180px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.control-group select:focus {
+  outline: none;
+  border-color: rgba(56, 189, 248, 0.65);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25);
+}
+
 .control-group input[type="number"]:focus {
   outline: none;
   border-color: rgba(56, 189, 248, 0.65);

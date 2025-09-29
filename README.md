@@ -5,6 +5,7 @@ A browser-based interface for playing midi-like text files based on piano sheets
 ## Features
 - **Convert Midi files**  can play a midi file from pretty much any reasonable piano sheet using the `.txt` produced by `convert.py`.
 - **Tempo & transpose**  set BPM, shift the key, and reset instantly.
+- **Instrument palette**  swap between different instruments like pianos, guitar, violin directly from the UI.
 - **Visual guidance**  highlighted tokens, duration subscripts and a polished on-screen piano keep you oriented as you play.
 - **Auto-play & practice**  let the computer player step through the chart or use your own keyboard to match the target notes.
 - **Sustain toggle**  optional latch mode (UI switch or `Ctrl` hotkey) lets notes ring until you repress them, mimicking a sustain pedal.
