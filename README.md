@@ -17,3 +17,6 @@ A browser-based interface for playing midi-like text files based on piano sheets
    ```
 2. Open `index.html` in your browser.
 3. Choose the generated `output.txt`, adjust settings, and start practicing.
+
+## Credits 
+Benjamin Gleitzman's repo: gleitz/midi-js-soundfonts for midi samples used in the different instruments. 
