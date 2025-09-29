@@ -16,6 +16,8 @@
     <button id="transposeUp">Transpose +</button>
     <button id="transposeDown">Transpose -</button>
     <button id="transposeReset">Reset</button>
+    <label for="bpmInput">Tempo (BPM)</label>
+    <input type="number" id="bpmInput" min="30" max="300" value="120" step="1">
     <label for="volumeSlider">Volume</label>
     <input type="range" id="volumeSlider" min="-40" max="0" value="0" step="1">
     <span id="volumeValue">0 dB</span>
@@ -26,7 +28,15 @@
 
   <!-- Tone.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+  
   <script>
+    const DEFAULT_DURATION_BEATS = 0.5;
+    const DEFAULT_BPM = 120;
+    const BPM_MIN = 30;
+    const BPM_MAX = 300;
+    const DEFAULT_TIME_SIGNATURE = '4/4';
+
+    let bpm = DEFAULT_BPM;
     let tokens = [];
     let spans = [];
     let midiOut = null;
@@ -34,14 +44,14 @@
     let midiToKeyElement = {};
 
     let transpose = 0;
-    let playInterval = null;
+    let playTimeout = null;
     let isPlaying = false;
     let currentIndex = 0;
     let expectedNotes = [];
     let sequenceProgress = 0;
     let lastFile = null;
+    let scheduledTimeouts = [];
 
-    // 🎹 Piano sampler (reduced anchor set)
     const piano = new Tone.Sampler({
       urls: {
         A0: "A0.mp3", C1: "C1.mp3",
@@ -57,8 +67,8 @@
       baseUrl: "https://gleitz.github.io/midi-js-soundfonts/MusyngKite/acoustic_grand_piano-mp3/"
     }).toDestination();
 
-    const volumeSlider = document.getElementById("volumeSlider");
-    const volumeValue = document.getElementById("volumeValue");
+    const volumeSlider = document.getElementById('volumeSlider');
+    const volumeValue = document.getElementById('volumeValue');
 
     if (volumeSlider && volumeValue) {
       const updateVolume = (db) => {
@@ -68,48 +78,30 @@
 
       updateVolume(Number(volumeSlider.value));
 
-      volumeSlider.addEventListener("input", (event) => {
+      volumeSlider.addEventListener('input', (event) => {
         updateVolume(Number(event.target.value));
       });
     }
 
-    // --- Mapping from computer keyboard to MIDI ---
-    const layout = "1234567890qwertyuiopasdfghjklzxcvbnm".split("");
-    const numberShifts = "!@#$%^&*()";
-    const anchorKey = 't';   // middle C
-    const anchorMidi = 60;
-    const anchorIndex = layout.indexOf(anchorKey);
-
-        // --- Mapping from computer keyboard to MIDI ---
     const keyToMidi = {
-    // number row
-    '1':36, '!':37, '2':38, '@':39, '3':40, '#':40, '4':41, '$':42, '5':43, '%':44,
-    '6':45, '^':46, '7':47, '&':47, '8':48, '*':49, '9':50, '(':51, '0':52, ')':52,
-
-    // qwertyuiop
-    'q':53, 'Q':54, 'w':55, 'W':56, 'e':57, 'E':58, 'r':59, 'R':59, 't':60, 'T':61,
-    'y':62, 'Y':63, 'u':64, 'U':64, 'i':65, 'I':66, 'o':67, 'O':68, 'p':69, 'P':70,
-
-    // asdfghjkl
-    'a':71, 'A':71, 's':72, 'S':73, 'd':74, 'D':75, 'f':76, 'F':76, 'g':77, 'G':78,
-    'h':79, 'H':80, 'j':81, 'J':82, 'k':83, 'K':83, 'l':84, 'L':85,
-
-    // zxcvbnm
-    'z':86, 'Z':87, 'x':88, 'X':88, 'c':89, 'C':90, 'v':91, 'V':92,
-    'b':93, 'B':94, 'n':95, 'N':95, 'm':96, 'M':97
+      '1':36, '!':37, '2':38, '@':39, '3':40, '#':40, '4':41, '$':42, '5':43, '%':44,
+      '6':45, '^':46, '7':47, '&':47, '8':48, '*':49, '9':50, '(':51, '0':52, ')':52,
+      'q':53, 'Q':54, 'w':55, 'W':56, 'e':57, 'E':58, 'r':59, 'R':59, 't':60, 'T':61,
+      'y':62, 'Y':63, 'u':64, 'U':64, 'i':65, 'I':66, 'o':67, 'O':68, 'p':69, 'P':70,
+      'a':71, 'A':71, 's':72, 'S':73, 'd':74, 'D':75, 'f':76, 'F':76, 'g':77, 'G':78,
+      'h':79, 'H':80, 'j':81, 'J':82, 'k':83, 'K':83, 'l':84, 'L':85,
+      'z':86, 'Z':87, 'x':88, 'X':88, 'c':89, 'C':90, 'v':91, 'V':92,
+      'b':93, 'B':94, 'n':95, 'N':95, 'm':96, 'M':97
     };
 
-    // Build reverse map for display if needed
     const midiToKey = {};
-    for (const [k, v] of Object.entries(keyToMidi)) {
-    midiToKey[v] = k;
+    for (const [key, value] of Object.entries(keyToMidi)) {
+      midiToKey[value] = key;
     }
 
-
-    // --- Build full 88-key piano (A0–C8) ---
     function buildPiano() {
-      const container = document.getElementById("piano");
-      container.innerHTML = "";
+      const container = document.getElementById('piano');
+      container.innerHTML = '';
 
       const startMidi = 21;
       const endMidi = 108;
@@ -124,69 +116,303 @@
       for (let midi = startMidi; midi <= endMidi; midi++) {
         const pitchClass = midi % 12;
         if (!blackNotes[pitchClass]) {
-          const whiteKey = document.createElement("div");
-          whiteKey.className = "white";
-          whiteKey.style.left = (whiteIndex * whiteWidth) + "px";
-          whiteKey.style.width = whiteWidth + "px";
-          whiteKey.style.height = whiteHeight + "px";
+          const whiteKey = document.createElement('div');
+          whiteKey.className = 'white';
+          whiteKey.style.left = (whiteIndex * whiteWidth) + 'px';
+          whiteKey.style.width = whiteWidth + 'px';
+          whiteKey.style.height = whiteHeight + 'px';
           container.appendChild(whiteKey);
           midiToKeyElement[midi] = whiteKey;
           whiteIndex++;
         } else {
-          const blackKey = document.createElement("div");
-          blackKey.className = "black";
+          const blackKey = document.createElement('div');
+          blackKey.className = 'black';
           const offset = (whiteIndex * whiteWidth) - (blackWidth / 2);
-          blackKey.style.left = offset + "px";
-          blackKey.style.width = blackWidth + "px";
-          blackKey.style.height = blackHeight + "px";
+          blackKey.style.left = offset + 'px';
+          blackKey.style.width = blackWidth + 'px';
+          blackKey.style.height = blackHeight + 'px';
           container.appendChild(blackKey);
           midiToKeyElement[midi] = blackKey;
         }
       }
 
-      container.style.width = (whiteIndex * whiteWidth) + "px";
+      container.style.width = (whiteIndex * whiteWidth) + 'px';
     }
     buildPiano();
 
-    // --- Transpose controls ---
-    document.getElementById("transposeUp").addEventListener("click", () => {
+    document.getElementById('transposeUp').addEventListener('click', () => {
       transpose = Math.min(transpose + 1, 12);
-      document.getElementById("transposeValue").textContent = transpose;
+      document.getElementById('transposeValue').textContent = transpose;
     });
-    document.getElementById("transposeDown").addEventListener("click", () => {
+    document.getElementById('transposeDown').addEventListener('click', () => {
       transpose = Math.max(transpose - 1, -12);
-      document.getElementById("transposeValue").textContent = transpose;
+      document.getElementById('transposeValue').textContent = transpose;
     });
-    document.getElementById("transposeReset").addEventListener("click", () => {
+    document.getElementById('transposeReset').addEventListener('click', () => {
       transpose = 0;
-      document.getElementById("transposeValue").textContent = transpose;
+      document.getElementById('transposeValue').textContent = transpose;
     });
 
     function applyTranspose(note) {
-      if (!note) return null;
-      let shifted = note + transpose;
+      if (note === undefined || note === null) return null;
+      const shifted = note + transpose;
       return Math.max(21, Math.min(108, shifted));
     }
 
-    const fileInput = document.getElementById("fileInput");
-    const playButton = document.getElementById("playBtn");
-    const stopButton = document.getElementById("stopBtn");
+    const NOTE_REFERENCES = [
+      { beats: 4, label: '1' },
+      { beats: 3, label: '2.' },
+      { beats: 2, label: '2' },
+      { beats: 1.5, label: '4.' },
+      { beats: 1, label: '4' },
+      { beats: 0.75, label: '8.' },
+      { beats: 0.5, label: '8' },
+      { beats: 0.375, label: '16.' },
+      { beats: 0.25, label: '16' },
+      { beats: 0.1875, label: '32.' },
+      { beats: 0.125, label: '32' }
+    ];
+    const NOTE_TOLERANCE = 0.05;
+
+    function beatsToNoteLabel(beats) {
+      if (!Number.isFinite(beats) || beats <= 0) return '';
+      for (const ref of NOTE_REFERENCES) {
+        if (Math.abs(ref.beats - beats) <= NOTE_TOLERANCE) {
+          return ref.label;
+        }
+      }
+      const denom = 4 / beats;
+      if (Number.isFinite(denom) && denom > 0) {
+        const rounded = Math.round(denom);
+        if (rounded > 0 && rounded <= 128) {
+          return String(rounded);
+        }
+      }
+      return beats.toFixed(2).replace(/\.0+$/, '');
+    }
+
+    function normalizeBpm(raw) {
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value <= 0) return DEFAULT_BPM;
+      return Math.min(BPM_MAX, Math.max(BPM_MIN, value));
+    }
+
+    function applyBpmFromInput(newValue) {
+      bpm = normalizeBpm(newValue);
+      if (bpmInput) {
+        bpmInput.value = String(bpm);
+      }
+    }
+
+    function parseTokenString(tokenStr) {
+      if (!tokenStr) return null;
+      const [symbolPart, durationPartRaw] = tokenStr.split('|');
+      const symbol = symbolPart || tokenStr;
+      const type = symbol === '_' ? 'rest' : symbol.startsWith('[') ? 'chord' : symbol.startsWith('{') ? 'sequence' : 'single';
+      const chars = type === 'rest'
+        ? []
+        : type === 'single'
+          ? [symbol]
+          : symbol.replace(/[{}\[\]]/g, '').split('');
+
+      let durations = [];
+      let waitBeats = null;
+
+      if (durationPartRaw) {
+        const [durSegment, waitSegment] = durationPartRaw.split(';');
+        if (durSegment) {
+          durations = durSegment.split(',').map(raw => {
+            const value = Number(raw);
+            return Number.isFinite(value) ? Math.max(value, 0) : DEFAULT_DURATION_BEATS;
+          }).filter(value => value > 0);
+        }
+        if (waitSegment) {
+          const waitValue = Number(waitSegment);
+          if (Number.isFinite(waitValue) && waitValue > 0) {
+            waitBeats = waitValue;
+          }
+        }
+      }
+
+      if (type === 'sequence') {
+        if (!durations.length) {
+          durations = new Array(chars.length).fill(DEFAULT_DURATION_BEATS);
+        } else if (durations.length !== chars.length) {
+          const last = durations[durations.length - 1] || DEFAULT_DURATION_BEATS;
+          while (durations.length < chars.length) {
+            durations.push(last);
+          }
+          durations = durations.slice(0, chars.length);
+        }
+      } else if (type === 'rest') {
+        durations = [];
+      } else {
+        if (!durations.length) {
+          durations = [DEFAULT_DURATION_BEATS];
+        } else {
+          durations = [durations[0]];
+        }
+      }
+
+      const durationSum = durations.reduce((total, value) => total + (Number.isFinite(value) ? value : 0), 0);
+      if (!Number.isFinite(waitBeats) || waitBeats <= 0) {
+        waitBeats = type === 'rest' ? (durationSum || DEFAULT_DURATION_BEATS) : Math.max(durationSum, DEFAULT_DURATION_BEATS);
+      }
+
+      return {
+        original: tokenStr,
+        symbol,
+        type,
+        chars,
+        durations,
+        waitBeats
+      };
+    }
+
+    function getBeatDurationMs() {
+      const current = Number.isFinite(bpm) && bpm > 0 ? bpm : DEFAULT_BPM;
+      const clamped = Math.min(BPM_MAX, Math.max(BPM_MIN, current));
+      return 60000 / clamped;
+    }
+
+    function durationToMs(beats) {
+      const value = Number.isFinite(beats) && beats > 0 ? beats : DEFAULT_DURATION_BEATS;
+      return Math.max(20, value * getBeatDurationMs());
+    }
+
+    function sumDurations(token) {
+      if (!token || !token.durations || !token.durations.length) return DEFAULT_DURATION_BEATS;
+      return token.durations.reduce((total, value) => total + (Number.isFinite(value) ? value : 0), 0) || DEFAULT_DURATION_BEATS;
+    }
+
+    function makeDurationLabel(token) {
+      if (!token) return '';
+      if (token.type === 'rest') {
+        return beatsToNoteLabel(token.waitBeats);
+      }
+      if (token.type === 'sequence') {
+        return token.durations.map(beatsToNoteLabel).join(',');
+      }
+      if (token.durations.length) {
+        return beatsToNoteLabel(token.durations[0]);
+      }
+      return '';
+    }
+
+    function renderTokens() {
+      const out = document.getElementById('output');
+      out.innerHTML = '';
+      spans = tokens.map((token, index) => {
+        const wrapper = document.createElement('span');
+        wrapper.className = 'token';
+
+        const symbolSpan = document.createElement('span');
+        symbolSpan.className = 'token-symbol';
+        symbolSpan.textContent = token.symbol;
+
+        const label = makeDurationLabel(token);
+        if (label) {
+          const sub = document.createElement('sub');
+          sub.className = 'token-duration';
+          sub.textContent = label;
+          symbolSpan.appendChild(sub);
+        }
+
+        wrapper.appendChild(symbolSpan);
+        out.appendChild(wrapper);
+        if (index < tokens.length - 1) {
+          out.appendChild(document.createTextNode(' '));
+        }
+        return wrapper;
+      });
+
+      currentIndex = 0;
+      expectedNotes = [];
+      sequenceProgress = 0;
+      setTarget(true);
+    }
+
+    function scheduleTimeout(callback, delay) {
+      const id = setTimeout(() => {
+        scheduledTimeouts = scheduledTimeouts.filter(handle => handle !== id);
+        callback();
+      }, delay);
+      scheduledTimeouts.push(id);
+      return id;
+    }
+
+    function clearScheduledTimeouts() {
+      scheduledTimeouts.forEach(id => clearTimeout(id));
+      scheduledTimeouts = [];
+    }
+
+    function stopAllNotes() {
+      if (midiOut && !useTone) {
+        try {
+          midiOut.send([0xB0, 0x7B, 0]);
+        } catch (error) {
+          console.warn('Unable to send all-notes-off to MIDI output.', error);
+        }
+      }
+      if (typeof piano.releaseAll === 'function') {
+        piano.releaseAll();
+      }
+      Object.values(midiToKeyElement).forEach(el => el.classList.remove('active'));
+    }
+
+    function pauseAutoPlay() {
+      if (playTimeout) {
+        clearTimeout(playTimeout);
+        playTimeout = null;
+      }
+      clearScheduledTimeouts();
+      stopAllNotes();
+      isPlaying = false;
+      if (playButton) {
+        playButton.textContent = 'Play';
+      }
+    }
+
+    function stopAutoPlay(resetIndex = false) {
+      pauseAutoPlay();
+      if (resetIndex) {
+        currentIndex = 0;
+        setTarget(true);
+      }
+    }
+
+    const fileInput = document.getElementById('fileInput');
+    const playButton = document.getElementById('playBtn');
+    const stopButton = document.getElementById('stopBtn');
+    const bpmInput = document.getElementById('bpmInput');
+
+    const handleBpmInput = (event) => applyBpmFromInput(event.target.value);
+
+    if (bpmInput) {
+      applyBpmFromInput(bpmInput.value || DEFAULT_BPM);
+      bpmInput.addEventListener('change', handleBpmInput);
+      bpmInput.addEventListener('input', handleBpmInput);
+    }
 
     function loadFile(file) {
+      pauseAutoPlay();
       if (!file) return;
       const reader = new FileReader();
-      reader.onload = function(ev) {
-        const textContent = (ev.target.result || "").toString().trim();
-        tokens = textContent ? textContent.split(/\s+/) : [];
+      reader.onload = function(event) {
+        const rawText = (event.target.result || '').toString();
+        const lines = rawText.split(/\r?\n/).map(line => line.trim());
+        const filtered = lines.filter(line => line && !line.startsWith('#'));
+        const flattened = filtered.join(' ');
+        const rawTokens = flattened ? flattened.split(/\s+/) : [];
+        tokens = rawTokens.map(parseTokenString).filter(Boolean);
         renderTokens();
       };
       reader.readAsText(file);
     }
 
-    // --- Load text file ---
     if (fileInput) {
-      fileInput.addEventListener('change', e => {
-        const file = e.target.files && e.target.files[0];
+      fileInput.addEventListener('change', (event) => {
+        const file = event.target.files && event.target.files[0];
         if (!file) return;
         lastFile = file;
         loadFile(file);
@@ -195,73 +421,161 @@
 
     if (stopButton) {
       stopButton.addEventListener('click', () => {
-        if (playInterval) {
-          clearInterval(playInterval);
-          playInterval = null;
-        }
-        isPlaying = false;
-        if (playButton) {
-          playButton.textContent = "Play";
-        }
+        stopAutoPlay(true);
         expectedNotes = [];
         sequenceProgress = 0;
-        currentIndex = 0;
-
-        if (typeof piano.releaseAll === 'function') {
-          piano.releaseAll();
-        }
-
         if (lastFile) {
           loadFile(lastFile);
         } else {
-          spans.forEach(span => span.classList.remove("highlight", "wrong"));
+          spans.forEach(span => span.classList.remove('highlight', 'wrong'));
         }
       });
     }
 
-    function renderTokens() {
-      const out = document.getElementById('output');
-      out.innerHTML = "";
-      spans = tokens.map((tok, idx) => {
-        const span = document.createElement("span");
-        span.textContent = tok;
-        out.appendChild(span);
-        if (idx < tokens.length - 1) out.appendChild(document.createTextNode(" "));
-        return span;
-      });
-      currentIndex = 0;
-      setTarget();
-    }
+    function setTarget(skipRests = false) {
+      spans.forEach(span => span.classList.remove('highlight', 'wrong'));
+      if (currentIndex >= tokens.length) return;
 
-    // --- Highlight target ---
-    function setTarget() {
-    // Already finished?
-    if (currentIndex >= tokens.length) return;
+      const token = tokens[currentIndex];
+      if (!token) return;
 
-    spans.forEach(s => s.classList.remove("highlight", "wrong"));
-    spans[currentIndex].classList.add("highlight");
-    spans[currentIndex].scrollIntoView({ behavior: "smooth", block: "center" });
-
-    const tok = tokens[currentIndex];
-
-    // --- Auto-skip pauses ---
-    if (tok === "_") {
+      if (skipRests && token.type === 'rest') {
         currentIndex++;
-        setTarget();  // immediately jump to next
+        setTarget(skipRests);
         return;
-    }
+      }
 
-    if (tok.startsWith("[")) {
-        expectedNotes = tok.replace(/\[|\]/g,"").split("").map(k => applyTranspose(keyToMidi[k]));
-    } else if (tok.startsWith("{")) {
-        expectedNotes = tok.replace(/\{|\}/g,"").split("").map(k => applyTranspose(keyToMidi[k]));
+      const span = spans[currentIndex];
+      if (span) {
+        span.classList.add('highlight');
+        span.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
+      if (token.type === 'rest') {
+        expectedNotes = [];
         sequenceProgress = 0;
-    } else {
-        expectedNotes = [applyTranspose(keyToMidi[tok])];
-    }
+        return;
+      }
+
+      const midiNotes = token.chars
+        .map(character => applyTranspose(keyToMidi[character]))
+        .filter(note => note !== null);
+
+      if (token.type === 'chord') {
+        expectedNotes = midiNotes.slice();
+        sequenceProgress = 0;
+      } else if (token.type === 'sequence') {
+        expectedNotes = midiNotes.slice();
+        sequenceProgress = 0;
+      } else {
+        expectedNotes = midiNotes.length ? [midiNotes[0]] : [];
+        sequenceProgress = 0;
+      }
     }
 
-    // --- MIDI Setup ---
+    function playToken(token) {
+      if (!token) {
+        return;
+      }
+
+      if (token.type === 'rest') {
+        return;
+      }
+
+      if (token.type === 'chord') {
+        const notes = token.chars
+          .map(character => applyTranspose(keyToMidi[character]))
+          .filter(note => note !== null);
+        const holdMs = durationToMs(token.durations[0]);
+        notes.forEach(note => noteOn(note));
+        notes.forEach(note => scheduleTimeout(() => noteOff(note), holdMs));
+        return;
+      }
+
+      if (token.type === 'sequence') {
+        let elapsedBeats = 0;
+        token.chars.forEach((character, index) => {
+          const midiNote = applyTranspose(keyToMidi[character]);
+          const beatLength = token.durations[index] || DEFAULT_DURATION_BEATS;
+          if (midiNote !== null) {
+            const delayMs = durationToMs(elapsedBeats);
+            const lengthMs = durationToMs(beatLength);
+            scheduleTimeout(() => noteOn(midiNote), delayMs);
+            scheduleTimeout(() => noteOff(midiNote), delayMs + lengthMs);
+          }
+          elapsedBeats += beatLength;
+        });
+        return;
+      }
+
+      const midiNote = applyTranspose(keyToMidi[token.symbol]);
+      const holdMs = durationToMs(token.durations[0]);
+      if (midiNote !== null) {
+        noteOn(midiNote);
+        scheduleTimeout(() => noteOff(midiNote), holdMs);
+      }
+    }
+
+    function startAutoPlay() {
+      if (!isPlaying) return;
+      if (currentIndex >= tokens.length) {
+        stopAutoPlay(true);
+        return;
+      }
+
+      setTarget(false);
+      const token = tokens[currentIndex];
+      playToken(token);
+
+      const waitBeats = token.waitBeats ?? sumDurations(token);
+      const waitMs = Math.max(50, durationToMs(waitBeats));
+      currentIndex++;
+
+      playTimeout = scheduleTimeout(() => {
+        startAutoPlay();
+      }, waitMs);
+    }
+
+    if (playButton) {
+      playButton.addEventListener('click', async () => {
+        if (!isPlaying) {
+          if (!tokens.length) return;
+          await Tone.start();
+          isPlaying = true;
+          playButton.textContent = 'Pause';
+          clearScheduledTimeouts();
+          startAutoPlay();
+        } else {
+          pauseAutoPlay();
+        }
+      });
+    }
+
+    function noteOn(note, velocity = 100) {
+      if (!note) return;
+      if (!useTone && midiOut) {
+        midiOut.send([0x90, note, velocity]);
+      } else {
+        piano.triggerAttack(Tone.Frequency(note, 'midi'), undefined, velocity / 127);
+      }
+      if (midiToKeyElement[note]) {
+        midiToKeyElement[note].classList.add('active');
+        midiToKeyElement[note].scrollIntoView({ behavior: 'smooth', inline: 'center' });
+      }
+    }
+
+    function noteOff(note) {
+      if (!note) return;
+      if (!useTone && midiOut) {
+        midiOut.send([0x80, note, 0]);
+      } else {
+        piano.triggerRelease(Tone.Frequency(note, 'midi'));
+      }
+      if (midiToKeyElement[note]) {
+        midiToKeyElement[note].classList.remove('active');
+      }
+    }
+
     if (navigator.requestMIDIAccess) {
       navigator.requestMIDIAccess().then(midiAccess => {
         const outputs = Array.from(midiAccess.outputs.values());
@@ -272,135 +586,59 @@
       });
     }
 
-    // --- Note control ---
-    function noteOn(note, vel=100) {
-      if (!note) return;
-      if (!useTone && midiOut) {
-        midiOut.send([0x90, note, vel]);
-      } else {
-        piano.triggerAttack(Tone.Frequency(note, "midi"), undefined, vel/127);
-      }
-      if (midiToKeyElement[note]) {
-        midiToKeyElement[note].classList.add("active");
-        midiToKeyElement[note].scrollIntoView({behavior: "smooth", inline: "center"});
-      }
-    }
-
-    function noteOff(note) {
-      if (!note) return;
-      if (!useTone && midiOut) {
-        midiOut.send([0x80, note, 0]);
-      } else {
-        piano.triggerRelease(Tone.Frequency(note, "midi"));
-      }
-      if (midiToKeyElement[note]) midiToKeyElement[note].classList.remove("active");
-    }
-
-    // --- Auto-play mode ---
-    if (playButton) {
-      playButton.addEventListener('click', async () => {
-        await Tone.start();
-
-        if (!isPlaying) {
-          isPlaying = true;
-          playButton.textContent = "Pause";
-          playInterval = setInterval(() => {
-            if (currentIndex >= tokens.length) {
-              if (playInterval) {
-                clearInterval(playInterval);
-                playInterval = null;
-              }
-              playButton.textContent = "Play";
-              isPlaying = false;
-              currentIndex = 0;
-              setTarget();
-              return;
-            }
-            playToken(tokens[currentIndex]);
-            currentIndex++;
-            setTarget();
-          }, 500);
-        } else {
-          isPlaying = false;
-          playButton.textContent = "Play";
-          if (playInterval) {
-            clearInterval(playInterval);
-            playInterval = null;
-          }
-        }
-      });
-    }
-
-    function playToken(tok) {
-      if (tok === "_") return;
-      else if (tok.startsWith("[")) {
-        const notes = tok.replace(/\[|\]/g,"").split("").map(k => applyTranspose(keyToMidi[k]));
-        notes.forEach(n => noteOn(n));
-        setTimeout(()=>notes.forEach(n=>noteOff(n)), 400);
-      } else if (tok.startsWith("{")) {
-        const notes = tok.replace(/\{|\}/g,"").split("");
-        notes.forEach((k, idx) => {
-          const n = applyTranspose(keyToMidi[k]);
-          setTimeout(()=>noteOn(n), idx*150);
-          setTimeout(()=>noteOff(n), idx*150+120);
-        });
-      } else {
-        const n = applyTranspose(keyToMidi[tok]);
-        if (n) {
-          noteOn(n);
-          setTimeout(()=>noteOff(n), 400);
-        }
-      }
-    }
-
-    // --- Practice mode (keyboard-driven) ---
-    document.addEventListener("keydown", e => {
-      if (isPlaying) return; // ignore during auto-play
-      const key = e.key;
+    document.addEventListener('keydown', event => {
+      if (isPlaying) return;
+      const key = event.key;
       if (!(key in keyToMidi)) return;
 
-      const note = applyTranspose(keyToMidi[key]);
-      noteOn(note);
-      setTimeout(()=>noteOff(note), 300);
+      const midiNote = applyTranspose(keyToMidi[key]);
+      if (midiNote === null) return;
 
-      const tok = tokens[currentIndex];
-      if (!tok) return;
+      noteOn(midiNote);
+      setTimeout(() => noteOff(midiNote), 300);
 
-      // Skip pauses automatically
-      if (tok === "_") {
+      if (currentIndex >= tokens.length) return;
+      const token = tokens[currentIndex];
+      if (!token) return;
+
+      if (token.type === 'rest') {
         currentIndex++;
-        setTarget();
+        setTarget(true);
         return;
       }
 
-      if (tok.startsWith("[")) {
-        expectedNotes = expectedNotes.filter(n => n !== note);
+      if (token.type === 'chord') {
+        expectedNotes = expectedNotes.filter(note => note !== midiNote);
         if (expectedNotes.length === 0) {
           currentIndex++;
-          setTarget();
+          setTarget(true);
         }
-      } else if (tok.startsWith("{")) {
-        if (note === expectedNotes[sequenceProgress]) {
+      } else if (token.type === 'sequence') {
+        if (midiNote === expectedNotes[sequenceProgress]) {
           sequenceProgress++;
           if (sequenceProgress >= expectedNotes.length) {
             currentIndex++;
-            setTarget();
+            setTarget(true);
           }
         } else {
           sequenceProgress = 0;
-          spans[currentIndex].classList.add("wrong");
-          setTimeout(()=>spans[currentIndex].classList.remove("wrong"), 200);
+          if (spans[currentIndex]) {
+            spans[currentIndex].classList.add('wrong');
+            setTimeout(() => spans[currentIndex].classList.remove('wrong'), 200);
+          }
         }
       } else {
-        if (note === expectedNotes[0]) {
+        if (midiNote === expectedNotes[0]) {
           currentIndex++;
-          setTarget();
-        } else {
-          spans[currentIndex].classList.add("wrong");
-          setTimeout(()=>spans[currentIndex].classList.remove("wrong"), 200);
+          setTarget(true);
+        } else if (spans[currentIndex]) {
+          spans[currentIndex].classList.add('wrong');
+          setTimeout(() => spans[currentIndex].classList.remove('wrong'), 200);
         }
       }
     });
   </script>
+
+
 </body>
 </html>
