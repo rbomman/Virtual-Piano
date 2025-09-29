@@ -19,4 +19,4 @@ A browser-based interface for playing midi-like text files based on piano sheets
 3. Choose the generated `output.txt`, adjust settings, and start practicing.
 
 ## Credits 
-Benjamin Gleitzman's repo: gleitz/midi-js-soundfonts for midi samples used in the different instruments. 
+Credits to Benjamin Gleitzman for the composition of gleitz/midi-js-soundfonts used to get midi samples for the different instruments. 
