@@ -41,6 +41,12 @@
           <span id="volumeValue" class="value-tag">0 dB</span>
         </div>
       </div>
+      <div class="control-group control-group--toggle">
+        <label class="toggle-switch">
+          <input type="checkbox" id="sustainToggle">
+          <span class="toggle-track">Sustain</span>
+        </label>
+      </div>
     </div>
 
     <p class="transpose-indicator">Transpose: <span id="transposeValue">0</span> semitones</p>
@@ -66,6 +72,7 @@
     let midiToKeyElement = {};
 
     let transpose = 0;
+    let sustainEnabled = false;
     let playTimeout = null;
     let isPlaying = false;
     let currentIndex = 0;
@@ -74,6 +81,8 @@
     let lastFile = null;
     let scheduledTimeouts = [];
     let fileNameLabel = null;
+    const heldKeys = new Map();
+    const sustainedNotes = new Set();
 
     const piano = new Tone.Sampler({
       urls: {
@@ -126,6 +135,7 @@
       const container = document.getElementById('piano');
       if (!container) return;
       container.innerHTML = '';
+      midiToKeyElement = {};
 
       const keysWrapper = document.createElement('div');
       keysWrapper.className = 'piano-keys';
@@ -166,8 +176,25 @@
 
       const keysWidth = whiteIndex * whiteWidth;
       keysWrapper.style.width = keysWidth + 'px';
+
+      const computed = window.getComputedStyle(container);
+      const paddingLeft = parseFloat(computed.paddingLeft) || 0;
+      const paddingRight = parseFloat(computed.paddingRight) || 0;
+      const available = container.clientWidth - paddingLeft - paddingRight;
+      let scale = 1;
+      if (available > 0 && keysWidth > 0) {
+        scale = Math.min(1, available / keysWidth);
+      }
+      if (scale < 1) {
+        keysWrapper.style.transform = `scale(${scale})`;
+      } else {
+        keysWrapper.style.transform = '';
+      }
     }
     buildPiano();
+    window.addEventListener('resize', () => {
+      requestAnimationFrame(buildPiano);
+    });
 
     document.getElementById('transposeUp').addEventListener('click', () => {
       transpose = Math.min(transpose + 1, 12);
@@ -386,6 +413,33 @@
       scheduledTimeouts = [];
     }
 
+    function releaseNoteAudio(note) {
+      if (!note) return;
+      if (!useTone && midiOut) {
+        midiOut.send([0x80, note, 0]);
+      } else {
+        piano.triggerRelease(Tone.Frequency(note, 'midi'));
+      }
+    }
+
+    function releaseSustainedNotes() {
+      if (!sustainedNotes.size) return;
+      const notes = Array.from(sustainedNotes);
+      notes.forEach(note => {
+        releaseNoteAudio(note);
+        if (midiToKeyElement[note]) {
+          midiToKeyElement[note].classList.remove('active');
+        }
+      });
+      sustainedNotes.clear();
+    }
+
+    function setSustain(enabled) {
+      sustainEnabled = !!enabled;
+      if (sustainToggle) sustainToggle.checked = sustainEnabled;
+      if (!sustainEnabled) releaseSustainedNotes();
+    }
+
     function stopAllNotes() {
       if (midiOut && !useTone) {
         try {
@@ -397,7 +451,9 @@
       if (typeof piano.releaseAll === 'function') {
         piano.releaseAll();
       }
+      releaseSustainedNotes();
       Object.values(midiToKeyElement).forEach(el => el.classList.remove('active'));
+      heldKeys.clear();
     }
 
     function pauseAutoPlay() {
@@ -425,9 +481,17 @@
     const playButton = document.getElementById('playBtn');
     const stopButton = document.getElementById('stopBtn');
     const bpmInput = document.getElementById('bpmInput');
+    const sustainToggle = document.getElementById('sustainToggle');
 
     fileNameLabel = document.getElementById('selectedFileName');
     updateFileNameDisplay();
+
+    if (sustainToggle) {
+      setSustain(sustainToggle.checked);
+      sustainToggle.addEventListener('change', (event) => {
+        setSustain(event.target.checked);
+      });
+    }
 
     const handleBpmInput = (event) => applyBpmFromInput(event.target.value);
 
@@ -543,7 +607,7 @@
           .filter(note => note !== null);
         const holdMs = durationToMs(token.durations[0]);
         notes.forEach(note => noteOn(note));
-        notes.forEach(note => scheduleTimeout(() => noteOff(note), holdMs));
+        notes.forEach(note => scheduleTimeout(() => noteOff(note, true), holdMs));
         return;
       }
 
@@ -556,7 +620,7 @@
             const delayMs = durationToMs(elapsedBeats);
             const lengthMs = durationToMs(beatLength);
             scheduleTimeout(() => noteOn(midiNote), delayMs);
-            scheduleTimeout(() => noteOff(midiNote), delayMs + lengthMs);
+            scheduleTimeout(() => noteOff(midiNote, true), delayMs + lengthMs);
           }
           elapsedBeats += beatLength;
         });
@@ -567,7 +631,7 @@
       const holdMs = durationToMs(token.durations[0]);
       if (midiNote !== null) {
         noteOn(midiNote);
-        scheduleTimeout(() => noteOff(midiNote), holdMs);
+        scheduleTimeout(() => noteOff(midiNote, true), holdMs);
       }
     }
 
@@ -608,6 +672,10 @@
 
     function noteOn(note, velocity = 100) {
       if (!note) return;
+      if (sustainEnabled && sustainedNotes.has(note)) {
+        releaseNoteAudio(note);
+        sustainedNotes.delete(note);
+      }
       if (!useTone && midiOut) {
         midiOut.send([0x90, note, velocity]);
       } else {
@@ -615,16 +683,17 @@
       }
       if (midiToKeyElement[note]) {
         midiToKeyElement[note].classList.add('active');
-        midiToKeyElement[note].scrollIntoView({ behavior: 'smooth', inline: 'center' });
       }
     }
 
-    function noteOff(note) {
+    function noteOff(note, force = false) {
       if (!note) return;
-      if (!useTone && midiOut) {
-        midiOut.send([0x80, note, 0]);
+      const shouldRelease = force || !sustainEnabled;
+      if (shouldRelease) {
+        releaseNoteAudio(note);
+        sustainedNotes.delete(note);
       } else {
-        piano.triggerRelease(Tone.Frequency(note, 'midi'));
+        sustainedNotes.add(note);
       }
       if (midiToKeyElement[note]) {
         midiToKeyElement[note].classList.remove('active');
@@ -643,14 +712,22 @@
 
     document.addEventListener('keydown', event => {
       if (isPlaying) return;
+      if (event.repeat) return;
       const key = event.key;
+      const code = event.code;
+      if (key === 'Control' || code === 'ControlLeft' || code === 'ControlRight') {
+        setSustain(!sustainEnabled);
+        event.preventDefault();
+        return;
+      }
       if (!(key in keyToMidi)) return;
+      if (heldKeys.has(code)) return;
 
       const midiNote = applyTranspose(keyToMidi[key]);
       if (midiNote === null) return;
 
       noteOn(midiNote);
-      setTimeout(() => noteOff(midiNote), 300);
+      heldKeys.set(code, midiNote);
 
       if (currentIndex >= tokens.length) return;
       const token = tokens[currentIndex];
@@ -690,6 +767,15 @@
           spans[currentIndex].classList.add('wrong');
           setTimeout(() => spans[currentIndex].classList.remove('wrong'), 200);
         }
+      }
+    });
+
+    document.addEventListener('keyup', event => {
+      const code = event.code;
+      const midiNote = heldKeys.get(code);
+      if (midiNote !== undefined) {
+        noteOff(midiNote);
+        heldKeys.delete(code);
       }
     });
   </script>
